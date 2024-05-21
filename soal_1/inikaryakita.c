@@ -10,73 +10,73 @@
 #include <dirent.h>
 #include <stdlib.h>
 
-// path clone
-static const char *dirpath = "/home/zaa/portofolio/";
+// Path direktori yang akan dimount
+static const char *mounted_directory_path = "/home/zaa/portofolio/";
 
-static int hjp_getattr(const char *path, struct stat *stbuf) {
-    char fpath[1000];
-    sprintf(fpath, "%s%s", dirpath, path);
-    int res = 0;
+static int get_file_attributes(const char *path, struct stat *stat_buffer) {
+    char full_path[1000];
+    sprintf(full_path, "%s%s", mounted_directory_path, path);
+    int result = 0;
 
-    memset(stbuf, 0, sizeof(struct stat));
+    memset(stat_buffer, 0, sizeof(struct stat));
     if (strcmp(path, "/") == 0) {
-        stbuf->st_mode = S_IFDIR | 0755;
-        stbuf->st_nlink = 2;
+        stat_buffer->st_mode = S_IFDIR | 0755;
+        stat_buffer->st_nlink = 2;
     } else if (strcmp(path, "/bahaya") == 0) {
-        stbuf->st_mode = S_IFDIR | 0755;
-        stbuf->st_nlink = 2;
+        stat_buffer->st_mode = S_IFDIR | 0755;
+        stat_buffer->st_nlink = 2;
     } else {
-        res = lstat(fpath, stbuf);
-        if (res == -1)
+        result = lstat(full_path, stat_buffer);
+        if (result == -1)
             return -errno;
     }
     return 0;
 }
 
-static int hjp_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
-                       off_t offset, struct fuse_file_info *fi)
+static int read_directory_contents(const char *path, void *buffer, fuse_fill_dir_t filler,
+                                   off_t offset, struct fuse_file_info *file_info)
 {
-    char fpath[1000];
-    sprintf(fpath, "%s%s", dirpath, path);
+    char full_path[1000];
+    sprintf(full_path, "%s%s", mounted_directory_path, path);
 
-    DIR *dp;
-    struct dirent *de;
+    DIR *directory_pointer;
+    struct dirent *directory_entry;
 
     (void)offset;
-    (void)fi;
+    (void)file_info;
 
-    dp = opendir(fpath);
-    if (dp == NULL)
+    directory_pointer = opendir(full_path);
+    if (directory_pointer == NULL)
         return -errno;
 
-    filler(buf, ".", NULL, 0);
-    filler(buf, "..", NULL, 0);
+    filler(buffer, ".", NULL, 0);
+    filler(buffer, "..", NULL, 0);
 
-    while ((de = readdir(dp)) != NULL) {
-        struct stat st;
-        memset(&st, 0, sizeof(st));
-        st.st_ino = de->d_ino;
-        st.st_mode = de->d_type << 12;
-        if (filler(buf, de->d_name, &st, 0))
+    while ((directory_entry = readdir(directory_pointer)) != NULL) {
+        struct stat stat_info;
+        memset(&stat_info, 0, sizeof(stat_info));
+        stat_info.st_ino = directory_entry->d_ino;
+        stat_info.st_mode = directory_entry->d_type << 12;
+        if (filler(buffer, directory_entry->d_name, &stat_info, 0))
             break;
     }
 
-    closedir(dp);
+    closedir(directory_pointer);
     return 0;
 }
 
-static int hjp_open(const char *path, struct fuse_file_info *fi) {
-    char fpath[1000];
-    sprintf(fpath, "%s%s", dirpath, path);
-    int fd = open(fpath, fi->flags);
-    if (fd == -1)
+static int open_file(const char *path, struct fuse_file_info *file_info) {
+    char full_path[1000];
+    sprintf(full_path, "%s%s", mounted_directory_path, path);
+    int file_descriptor = open(full_path, file_info->flags);
+    if (file_descriptor == -1)
         return -errno;
 
-    fi->fh = fd;
+    file_info->fh = file_descriptor;
     return 0;
 }
 
-// Fungsi tambahan untuk membalik string
+// Fungsi untuk membalik urutan string
 void reverse_string(char *str, size_t len) {
     char *start = str;
     char *end = str + len - 1;
@@ -87,29 +87,29 @@ void reverse_string(char *str, size_t len) {
     }
 }
 
-static int hjp_mknod(const char *path, mode_t mode, dev_t dev) {
-    char fpath[1000];
-    sprintf(fpath, "%s%s", dirpath, path);
+static int create_file_or_directory(const char *path, mode_t mode, dev_t dev) {
+    char full_path[1000];
+    sprintf(full_path, "%s%s", mounted_directory_path, path);
 
-    int res;
+    int result;
     if (S_ISREG(mode)) { // Jika file biasa
-        res = open(fpath, O_CREAT | O_EXCL | O_WRONLY, mode);
-        if (res >= 0)
-            close(res);
+        result = open(full_path, O_CREAT | O_EXCL | O_WRONLY, mode);
+        if (result >= 0)
+            close(result);
     } else if (S_ISFIFO(mode)) { // Jika FIFO (named pipe)
-        res = mkfifo(fpath, mode);
+        result = mkfifo(full_path, mode);
     } else {
-        res = mknod(fpath, mode, dev);
+        result = mknod(full_path, mode, dev);
     }
-    if (res == -1)
+    if (result == -1)
         return -errno;
 
     return 0;
 }
 
-static int hjp_write(const char *path, const char *data, size_t length, off_t file_offset, struct fuse_file_info *fi) {
+static int write_file(const char *path, const char *data, size_t length, off_t file_offset, struct fuse_file_info *file_info) {
     char full_path[1000]; 
-    snprintf(full_path, sizeof(full_path), "%s%s", dirpath, path);
+    snprintf(full_path, sizeof(full_path), "%s%s", mounted_directory_path, path);
 
     int file_descriptor = open(full_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (file_descriptor == -1) {
@@ -127,9 +127,9 @@ static int hjp_write(const char *path, const char *data, size_t length, off_t fi
     return result;
 }
 
-static int hjp_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
-    char fpath[1000];
-    snprintf(fpath, sizeof(fpath), "%s%s", dirpath, path);
+static int read_file(const char *path, char *buffer, size_t size, off_t offset, struct fuse_file_info *file_info) {
+    char full_path[1000];
+    snprintf(full_path, sizeof(full_path), "%s%s", mounted_directory_path, path);
 
     // Check if the file has a 'test' prefix
     const char *filename = strrchr(path, '/');
@@ -141,14 +141,14 @@ static int hjp_read(const char *path, char *buf, size_t size, off_t offset, stru
 
     if (strncmp(filename, "test", 4) == 0) {
         // If the file has a 'test' prefix, reverse the words in the lines before output
-        FILE *file = fopen(fpath, "r");
-        if (file == NULL) {
+        FILE *file_pointer = fopen(full_path, "r");
+        if (file_pointer == NULL) {
             return -errno;
         }
 
         char line[1024];
-        buf[0] = '\0'; // Initialize the buffer to an empty string
-        while (fgets(line, sizeof(line), file) != NULL) {
+        buffer[0] = '\0'; // Initialize the buffer to an empty string
+        while (fgets(line, sizeof(line), file_pointer) != NULL) {
             size_t len = strlen(line);
             if (line[len - 1] == '\n') {
                 line[len - 1] = '\0';
@@ -158,119 +158,119 @@ static int hjp_read(const char *path, char *buf, size_t size, off_t offset, stru
             reverse_string(line, strlen(line));
 
             // Check if the buffer is large enough
-            if (strlen(buf) + strlen(line) + 1 > size) {
-                fclose(file);
+            if (strlen(buffer) + strlen(line) + 1 > size) {
+                fclose(file_pointer);
                 return -ENOMEM;
             }
 
-            strcat(buf, line);
-            strcat(buf, "\n");
+            strcat(buffer, line);
+            strcat(buffer, "\n");
         }
 
-        fclose(file);
+        fclose(file_pointer);
     } else {
         // If the file doesn't have a 'test' prefix, output normally
-        int res = pread(fi->fh, buf, size, offset);
-        if (res == -1) {
-            res = -errno;
+        int result = pread(file_info->fh, buffer, size, offset);
+        if (result == -1) {
+            result = -errno;
         }
 
-        return res;
+        return result;
     }
 
-    return strlen(buf);
+    return strlen(buffer);
 }
 
-static int hjp_rename(const char *old_path, const char *new_path) {
-    char originalFilePath[1000], newFilePath[1000];
-    snprintf(originalFilePath, sizeof(originalFilePath), "%s%s", dirpath, old_path);
-    snprintf(newFilePath, sizeof(newFilePath), "%s%s", dirpath, new_path);
+static int rename_file(const char *old_path, const char *new_path) {
+    char original_file_path[1000], new_file_path[1000];
+    snprintf(original_file_path, sizeof(original_file_path), "%s%s", mounted_directory_path, old_path);
+    snprintf(new_file_path, sizeof(new_file_path), "%s%s", mounted_directory_path, new_path);
 
     if (strstr(new_path, "/wm") != NULL) { // Jika file dipindahkan ke folder /wm
-        int sourceFile = open(originalFilePath, O_RDONLY); 
-        if (sourceFile == -1) {
+        int source_file = open(original_file_path, O_RDONLY); 
+        if (source_file == -1) {
             perror("Error opening source file");
             return -errno;
         }
 
-        int destinationFile = open(newFilePath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (destinationFile == -1) {
-            perror("Error opening destination file");
-            close(sourceFile);
-            return -errno;
-        }
+        int destination_file = open(new_file_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (destination_file == -1) {
+           perror("Error opening destination file");
+           close(source_file);
+           return -errno;
+       }
 
-        char imageMagickCommand[1000];
-        snprintf(imageMagickCommand, sizeof(imageMagickCommand), 
-                 "convert -gravity south -geometry +0+20 /proc/%d/fd/%d -fill white -pointsize 36 -annotate +0+0 '%s' /proc/%d/fd/%d", 
-                 getpid(), sourceFile, "inikaryakita.id", getpid(), destinationFile);
+       char image_magick_command[1000];
+       snprintf(image_magick_command, sizeof(image_magick_command), 
+                "convert -gravity south -geometry +0+20 /proc/%d/fd/%d -fill white -pointsize 36 -annotate +0+0 '%s' /proc/%d/fd/%d", 
+                getpid(), source_file, "inikaryakita.id", getpid(), destination_file);
 
-        int result = system(imageMagickCommand);
-        if (result == -1) {
-            perror("Error executing ImageMagick command");
-        }
+       int result = system(image_magick_command);
+       if (result == -1) {
+           perror("Error executing ImageMagick command");
+       }
 
-        close(sourceFile);
-        close(destinationFile);
+       close(source_file);
+       close(destination_file);
 
-        if (unlink(originalFilePath) == -1) { // Hapus file asli setelah berhasil di-watermark
-            perror("Error deleting original file");
-            return -errno;
-        }
-    } else { // Jika tidak dipindahkan ke /wm, lakukan rename biasa
-        int result = rename(originalFilePath, newFilePath);
-        if (result == -1) {
-            perror("Error renaming file");
-            return -errno;
-        }
-    }
+       if (unlink(original_file_path) == -1) { // Hapus file asli setelah berhasil di-watermark
+           perror("Error deleting original file");
+           return -errno;
+       }
+   } else { // Jika tidak dipindahkan ke /wm, lakukan rename biasa
+       int result = rename(original_file_path, new_file_path);
+       if (result == -1) {
+           perror("Error renaming file");
+           return -errno;
+       }
+   }
 
-    return 0; // Berhasil
+   return 0; // Berhasil
 }
 
-static int hjp_chmod(const char *path, mode_t mode) {
-    char fpath[1000];
-    sprintf(fpath, "%s%s", dirpath, path);
-    int res;
+static int change_file_permissions(const char *path, mode_t mode) {
+   char full_path[1000];
+   sprintf(full_path, "%s%s", mounted_directory_path, path);
+   int result;
 
-    // Hanya ubah permission jika file bukan "script.sh"
-    if (strstr(path, "/script.sh") != NULL) {
-        return -EACCES; // memunculkan permission denied
-    } else {
-        res = chmod(fpath, mode);
-    }
+   // Hanya ubah permission jika file bukan "script.sh"
+   if (strstr(path, "/script.sh") != NULL) {
+       return -EACCES; // memunculkan permission denied
+   } else {
+       result = chmod(full_path, mode);
+   }
 
-    if (res == -1)
-        return -errno;
+   if (result == -1)
+       return -errno;
 
-    return 0;
+   return 0;
 }
 
-static int hjp_mkdir(const char *path, mode_t mode) {
-    char fpath[1000];
-    sprintf(fpath, "%s%s", dirpath, path);
-    int res;
+static int create_directory(const char *path, mode_t mode) {
+   char full_path[1000];
+   sprintf(full_path, "%s%s", mounted_directory_path, path);
+   int result;
 
-    res = mkdir(fpath, mode);
-    if (res == -1)
-        return -errno;
+   result = mkdir(full_path, mode);
+   if (result == -1)
+       return -errno;
 
-    return 0;
+   return 0;
 }
 
-static struct fuse_operations myfs_oper = {
-    .getattr    = hjp_getattr,
-    .readdir    = hjp_readdir,
-    .open       = hjp_open,
-    .read       = hjp_read,
-    .write      = hjp_write,
-    .rename     = hjp_rename,
-    .chmod      = hjp_chmod,
-    .mknod      = hjp_mknod,
-    .mkdir      = hjp_mkdir,
+static struct fuse_operations myfs_operations = {
+   .getattr    = get_file_attributes,
+   .readdir    = read_directory_contents,
+   .open       = open_file,
+   .read       = read_file,
+   .write      = write_file,
+   .rename     = rename_file,
+   .chmod      = change_file_permissions,
+   .mknod      = create_file_or_directory,
+   .mkdir      = create_directory,
 };
 
 int main(int argc, char *argv[]) {
-    umask(0);
-    return fuse_main(argc, argv, &myfs_oper, NULL);
+   umask(0);
+   return fuse_main(argc, argv, &myfs_operations, NULL);
 }
