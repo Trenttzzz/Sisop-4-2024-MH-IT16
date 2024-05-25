@@ -472,4 +472,321 @@
 
 ## Soal 3
 ### Langkah - Langkah
+### Dependensi
 
+#### Penambahan Library dan konstanta
+   ```c
+   #define FUSE_USE_VERSION 31
+   #include <fuse.h>
+   #include <stdio.h>
+   #include <string.h>
+   #include <stdlib.h>
+   #include <unistd.h>
+   #include <dirent.h>
+   #include <errno.h>
+   #include <fcntl.h>
+   #include <stddef.h>
+   #include <assert.h>
+   #include <sys/stat.h>
+   #include <time.h>
+
+   #define MAX_BUFFER 1028
+   #define MAX_SPLIT  10000
+   static const char *dirpath = "/home/winter/Documents/ITS/SISOP/Modul4/soal_3/relics";
+   ```
+   - MAX_BUFFER: Ukuran buffer maksimum.
+   - MAX_SPLIT: Ukuran maksimum setiap bagian file.
+   - dirpath: Jalur ke direktori tempat bagian file disimpan.
+
+#### Fungsi - fungsi
+
+1. arc_getattr
+   ```c
+   static int arc_getattr(const char *path, struct stat *stbuf)
+   {
+    memset(stbuf, 0, sizeof(struct stat));
+
+    // Mengatur atribut waktu dan kepemilikan
+    stbuf->st_uid   = getuid();
+    stbuf->st_gid   = getgid();
+    stbuf->st_atime = time(NULL);
+    stbuf->st_mtime = time(NULL);
+
+    if (strcmp(path, "/") == 0) {
+        stbuf->st_mode = S_IFDIR | 0755;
+        stbuf->st_nlink = 2;
+        return 0;
+    }
+
+    // Mendapatkan jalur lengkap item
+    char fpath[MAX_BUFFER];
+    sprintf(fpath, "%s%s", dirpath, path);
+
+    // Mengatur atribut file default
+    stbuf->st_mode = S_IFREG | 0644;
+    stbuf->st_nlink = 1;
+    stbuf->st_size = 0;
+
+    // Menghitung total ukuran semua bagian
+    char ppath[MAX_BUFFER + 4];
+    FILE *fd;
+    int i = 0;
+
+    while (1) {
+        sprintf(ppath, "%s.%03d", fpath, i++);
+        fd = fopen(ppath, "rb");
+        if (!fd) break;
+        fseek(fd, 0L, SEEK_END);
+        stbuf->st_size += ftell(fd);
+        fclose(fd);
+    }
+
+    if (i == 1) return -errno;
+    return 0;
+   }
+    ```
+   *Penjelasan*
+      Fungsi arc_getattr bertanggung jawab untuk mengambil atribut dari file atau direktori yang diminta. Fungsi ini  menginisialisasi struktur stat yang diberikan dengan nol, kemudian mengatur ID pengguna, ID grup, dan waktu akses serta modifikasi saat ini. Jika jalur yang diminta adalah root ("/"), fungsi mengatur atribut direktori dengan izin 0755 dan tautan (link) sebanyak 2. Jika bukan root, fungsi membangun jalur lengkap file atau direktori, mengatur atribut file default, dan menghitung ukuran total semua bagian dari file tersebut dengan membuka setiap bagian satu per satu hingga tidak ada lagi bagian yang ditemukan.
+
+2. arc_readdir
+
+   ```c
+   static int arc_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi)
+   {
+    (void) offset;
+    (void) fi;
+
+    filler(buf, ".", NULL, 0);
+    filler(buf, "..", NULL, 0);
+
+    char fpath[MAX_BUFFER];
+    sprintf(fpath, "%s%s", dirpath, path);
+
+    DIR *dp = opendir(fpath);
+    if (!dp) return -errno;
+
+    struct dirent *de;
+    while ((de = readdir(dp)) != NULL) {
+        struct stat st;
+        memset(&st, 0, sizeof(st));
+        st.st_ino = de->d_ino;
+        st.st_mode = de->d_type << 12;
+
+        if (strstr(de->d_name, ".000") == NULL) continue;
+
+        char cut[MAX_BUFFER];
+        strcpy(cut, de->d_name);
+        cut[strlen(cut) - 4] = '\lu\0';
+
+        if (filler(buf, cut, &st, 0)) break;
+    }
+
+    closedir(dp);
+    return 0;
+   }
+   ```
+*Penjelasan*
+      Fungsi arc_readdir bertanggung jawab untuk membaca isi dari sebuah direktori. Fungsi ini mengisi buffer dengan entri direktori default . dan ... Kemudian, fungsi membuka direktori yang diminta dan membaca setiap entri di dalamnya. Jika nama entri berakhiran .000, fungsi memotong bagian akhiran tersebut dan menambahkan nama yang dipotong ke buffer. Setelah semua entri dibaca, fungsi menutup direktori dan mengembalikan hasilnya.
+
+   3. arc_read
+      ```c
+      static int arc_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
+      {
+    (void) fi;
+
+    char fpath[MAX_BUFFER];
+    sprintf(fpath, "%s%s", dirpath, path);
+
+    char ppath[MAX_BUFFER + 4];
+    FILE *fd;
+    int i = 0;
+    size_t size_read, total_read = 0;
+
+    while (size > 0) {
+        sprintf(ppath, "%s.%03d", fpath, i++);
+        fd = fopen(ppath, "rb");
+        if (!fd) break;
+
+        fseek(fd, 0L, SEEK_END);
+        size_t size_part = ftell(fd);
+        fseek(fd, 0L, SEEK_SET);
+
+        if (offset >= size_part) {
+            offset -= size_part;
+            fclose(fd);
+            continue;
+        }
+
+        fseek(fd, offset, SEEK_SET);
+        size_read = fread(buf, 1, size, fd);
+        fclose(fd);
+
+        buf += size_read;
+        size -= size_read;
+        total_read += size_read;
+        offset = 0;
+    }
+
+    return total_read;
+      }
+      ```
+*Penjelasan*
+      Fungsi arc_read bertanggung jawab untuk membaca data dari file yang dipecah menjadi beberapa bagian. Fungsi ini membangun jalur lengkap dari file yang diminta dan membaca setiap bagian satu per satu hingga ukuran yang diminta terpenuhi atau tidak ada lagi bagian yang tersisa. Jika offset lebih besar dari ukuran bagian saat ini, fungsi menguranginya dengan ukuran bagian tersebut dan melanjutkan ke bagian berikutnya. Data yang dibaca disimpan dalam buffer dan ukuran serta offset diperbarui sesuai dengan jumlah data yang dibaca.
+
+4. arc_write
+   ```c
+   static int arc_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
+   {
+    (void) fi;
+
+    printf("init write: %s\n", path);
+
+    char fpath[MAX_BUFFER];
+    sprintf(fpath, "%s%s", dirpath, path);
+
+    char ppath[MAX_BUFFER + 4];
+    FILE *fd;
+
+    int pcurrent = offset / MAX_SPLIT;
+    size_t poffset = offset % MAX_SPLIT;
+    size_t total_write = 0;
+
+    while (size > 0) {
+        sprintf(ppath, "%s.%03d", fpath, pcurrent++);
+        fd = fopen(ppath, "r+b");
+        if (!fd) {
+            fd = fopen(ppath, "wb");
+            if (!fd) return -errno;
+        }
+
+        printf("write: %s\n", ppath);
+
+        fseek(fd, poffset, SEEK_SET);
+        size_t size_write;
+        if (size > (MAX_SPLIT - poffset))
+             size_write = MAX_SPLIT - poffset;
+        else size_write = size;
+
+        fwrite(buf, 1, size_write, fd);
+        fclose(fd);
+
+        buf += size_write;
+        size -= size_write;
+        total_write += size_write;
+
+        poffset = 0;
+    }
+    return total_write;
+      }
+   ```
+*Penjelasan*
+      Fungsi arc_write bertanggung jawab untuk menulis data ke file yang dipecah menjadi beberapa bagian. Fungsi ini membangun jalur lengkap dari file yang diminta dan menulis data ke setiap bagian satu per satu hingga ukuran yang diminta terpenuhi. Jika bagian yang dimaksud belum ada, fungsi membuatnya. Data yang ditulis disimpan dalam buffer dan ukuran serta offset diperbarui sesuai dengan jumlah data yang ditulis. Offset awal dihitung berdasarkan ukuran maksimum setiap bagian (MAX_SPLIT).
+
+   5. arc_unlink
+      ```c
+      static int arc_unlink(const char *path)
+      {
+    char fpath[MAX_BUFFER];
+    char ppath[MAX_BUFFER + 4];
+    sprintf(fpath, "%s%s", dirpath, path);
+
+    int pcurrent = 0;    
+    while (1) {
+        printf("unlink: %s\n", ppath);
+
+        sprintf(ppath, "%s.%03d", fpath, pcurrent++);
+        int res = unlink(ppath);
+        if (res == -1) {
+            if (errno == ENOENT) break;
+            return -errno;
+        }
+    }
+    return 0;
+      }
+      ```
+*Penjelasan*
+      Fungsi arc_unlink bertanggung jawab untuk menghapus file yang dipecah menjadi beberapa bagian. Fungsi ini membangun jalur lengkap dari file yang diminta dan menghapus setiap bagian satu per satu hingga tidak ada lagi bagian yang tersisa atau terjadi kesalahan. Jika kesalahan yang terjadi adalah karena file tidak ditemukan (ENOENT), maka fungsi berhenti menghapus dan mengembalikan hasilnya.
+
+   6. arc_create
+      ```c
+      static int arc_create(const char *path, mode_t mode, struct fuse_file_info *fi)
+      {
+    (void) fi;
+
+    char fpath[MAX_BUFFER];
+    sprintf(fpath, "%s%s.000", dirpath, path);
+
+    printf("create: %s\n", path);
+
+    int res = creat(fpath, mode);
+    if (res == -1) return -errno;
+
+    close(res);
+    return 0;
+      }
+      ```
+*Penjelasan*
+      Fungsi arc_create bertanggung jawab untuk membuat file baru. Fungsi ini membangun jalur lengkap dari file yang diminta dan membuat bagian pertama (.000). Jika terjadi kesalahan saat pembuatan, fungsi mengembalikan kesalahan tersebut.
+
+   7. arc_utimens
+      ```c
+      static int arc_utimens(const char *path, const struct timespec ts[2])
+      {
+    char fpath[MAX_BUFFER];
+    sprintf(fpath, "%s%s", dirpath, path);
+
+    char ppath[MAX_BUFFER + 4];
+    int pcurrent = 0;
+
+    while (1) {
+        sprintf(ppath, "%s.%03d", fpath, pcurrent++);
+        int res = utimensat(AT_FDCWD, ppath, ts, 0);
+        if (res == -1) {
+            if (errno == ENOENT) break;
+            return -errno;
+        }
+    }
+
+    return 0;
+      }
+      ```
+*Penjelasan*
+         Fungsi arc_utimens bertanggung jawab untuk mengatur waktu akses dan modifikasi dari file yang dipecah menjadi beberapa bagian. Fungsi ini membangun jalur lengkap dari file yang diminta dan mengatur waktu atribut untuk setiap bagiannya. Jika bagian yang dimaksud tidak ditemukan (ENOENT), maka fungsi berhenti mengatur waktu dan mengembalikan hasilnya.
+
+#### Struktur fuse_operations
+   ```c
+   static struct fuse_operations arc_oper = {
+    .getattr    = arc_getattr,
+    .readdir    = arc_readdir,
+    .read       = arc_read,
+    .write      = arc_write,
+    .unlink     = arc_unlink,
+    .create     = arc_create,
+    .utimens    = arc_utimens,
+};
+   ```
+*Penjelasan*
+      Struktur fuse_operations mendefinisikan fungsi-fungsi yang diimplementasikan untuk operasi FUSE. Setiap fungsi dikaitkan dengan operasi FUSE yang sesuai.
+
+#### Fungsi Main
+   ```c
+   int main(int argc, char *argv[])
+{
+    umask(0);
+    return fuse_main(argc, argv, &arc_oper, NULL);
+}
+   ```
+*Penjelasan*
+Fungsi main mengatur umask menjadi 0 untuk memastikan izin file tidak dibatasi oleh nilai umask yang ada. Fungsi ini kemudian memanggil fuse_main dengan argumen argc dan argv yang diteruskan dari baris perintah serta struktur fuse_operations yang telah didefinisikan sebelumnya. Fungsi ini memulai sistem file FUSE.
+
+
+
+
+
+
+
+
+
+
+
+      
